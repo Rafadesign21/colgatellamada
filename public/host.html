@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Videollamada Colgate - Asesor (Host)</title>
+    <!-- Solución para el error favicon.ico: Añade un ícono vacío -->
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
     <style>
         #controls { margin-top: 15px; }
@@ -17,6 +19,7 @@
             border-radius: 5px;
         }
         #toggleVideoButton:hover { background-color: #0056b3; }
+        #toggleVideoButton:disabled { background-color: #cccccc; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -52,12 +55,16 @@
         let peerId;
         let isShowingPromo = false;
 
-        // --- CONFIGURACIÓN DE SERVIDORES CON STUN Y TURN ---
-        // Esto soluciona el error "ICE failed" en redes complicadas.
+        // --- CONFIGURACIÓN DE SERVIDORES MÁS ROBUSTA ---
+        // Se añaden más servidores STUN para aumentar las posibilidades de conexión directa.
+        // NOTA: El servidor TURN gratuito puede ser inestable. Si los problemas persisten,
+        // es la confirmación para cambiar a un servicio de pago como Twilio.
         const iceServers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' },
                 {
                     urls: "turn:openrelay.metered.ca:80",
                     username: "openrelayproject",
@@ -71,21 +78,14 @@
             ]
         };
 
-        // Preparamos el stream del video promocional cuando sus metadatos se carguen.
         promoVideo.addEventListener('loadedmetadata', () => {
-            console.log('Metadata del video promocional cargada.');
             if (promoVideo.captureStream) {
                 promoVideoStream = promoVideo.captureStream();
             } else if (promoVideo.mozCaptureStream) {
-                promoVideoStream = promoVideo.mozCaptureStream(); // Compatibilidad con Firefox
-            } else {
-                console.error("El navegador no soporta la función captureStream.");
-                return;
+                promoVideoStream = promoVideo.mozCaptureStream();
             }
-            console.log('Stream del video promocional capturado y listo.');
         });
         
-        // Iniciar cámara local
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then(stream => {
                 localStream = stream;
@@ -93,27 +93,32 @@
                 statusDiv.textContent = 'Cámara iniciada. Esperando cliente...';
                 socket.emit('host-ready');
             })
-            .catch(error => console.error('Error al acceder a la cámara:', error));
+            .catch(error => { console.error('Error al acceder a la cámara:', error); });
 
         socket.on('start-call', (guestId) => {
             peerId = guestId;
             statusDiv.textContent = `Cliente conectado. Iniciando llamada...`;
-            toggleVideoButton.disabled = false;
-            peerConnection = new RTCPeerConnection(iceServers); // Usa la configuración con TURN
+            peerConnection = new RTCPeerConnection(iceServers);
+            
+            // Monitorear el estado de la conexión ICE
+            peerConnection.oniceconnectionstatechange = () => {
+                statusDiv.textContent = `Estado de la conexión: ${peerConnection.iceConnectionState}`;
+                if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+                    toggleVideoButton.disabled = false; // Habilitar el botón solo cuando la conexión es sólida
+                    statusDiv.textContent = 'Llamada en curso.';
+                }
+            };
+            
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
                     socket.emit('ice-candidate', { target: peerId, candidate: event.candidate });
                 }
             };
-            peerConnection.ontrack = event => {
-                remoteVideo.srcObject = event.streams[0];
-            };
+            peerConnection.ontrack = event => { remoteVideo.srcObject = event.streams[0]; };
             peerConnection.createOffer()
                 .then(offer => peerConnection.setLocalDescription(offer))
-                .then(() => {
-                    socket.emit('offer', { target: peerId, offer: peerConnection.localDescription });
-                });
+                .then(() => { socket.emit('offer', { target: peerId, offer: peerConnection.localDescription }); });
         });
 
         toggleVideoButton.addEventListener('click', () => {
@@ -124,43 +129,26 @@
             isShowingPromo = !isShowingPromo;
             if (isShowingPromo) {
                 localStream.getTracks().forEach(track => track.enabled = false);
-                const videoTrack = promoVideoStream.getVideoTracks()[0];
-                const audioTrack = promoVideoStream.getAudioTracks()[0];
-                replaceTrack(videoTrack, 'video');
-                replaceTrack(audioTrack, 'audio');
+                replaceTrack(promoVideoStream.getVideoTracks()[0], 'video');
+                replaceTrack(promoVideoStream.getAudioTracks()[0], 'audio');
                 promoVideo.play();
                 toggleVideoButton.textContent = 'Mostrar Cámara';
-                statusDiv.textContent = 'Mostrando video promocional al cliente.';
             } else {
                 promoVideo.pause();
                 localStream.getTracks().forEach(track => track.enabled = true);
-                const videoTrack = localStream.getVideoTracks()[0];
-                const audioTrack = localStream.getAudioTracks()[0];
-                replaceTrack(videoTrack, 'video');
-                replaceTrack(audioTrack, 'audio');
+                replaceTrack(localStream.getVideoTracks()[0], 'video');
+                replaceTrack(localStream.getAudioTracks()[0], 'audio');
                 toggleVideoButton.textContent = 'Mostrar Video Promocional';
-                statusDiv.textContent = 'Llamada en curso.';
             }
         });
 
         function replaceTrack(newTrack, kind) {
             const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === kind);
-            if (sender) {
-                sender.replaceTrack(newTrack);
-            }
+            if (sender) { sender.replaceTrack(newTrack); }
         }
 
-        socket.on('answer', (data) => {
-            statusDiv.textContent = 'Llamada en curso.';
-            peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-        });
-
-        socket.on('ice-candidate', (data) => {
-            if (peerConnection) {
-                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-            }
-        });
-
+        socket.on('answer', (data) => { peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer)); });
+        socket.on('ice-candidate', (data) => { if (peerConnection) { peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); } });
         socket.on('peer-disconnected', () => {
             statusDiv.textContent = 'El cliente se ha desconectado. Esperando uno nuevo...';
             remoteVideo.srcObject = null;
@@ -168,15 +156,10 @@
             toggleVideoButton.textContent = 'Mostrar Video Promocional';
             isShowingPromo = false;
             promoVideo.pause();
-            if (peerConnection) {
-                peerConnection.close();
-            }
+            if (peerConnection) { peerConnection.close(); }
             socket.emit('host-ready');
         });
-
-        socket.on('connect', () => {
-            statusDiv.textContent = 'Conectado al servidor. Iniciando cámara...';
-        });
+        socket.on('connect', () => { statusDiv.textContent = 'Conectado al servidor. Iniciando cámara...'; });
     </script>
 </body>
 </html>
