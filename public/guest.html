@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Videollamada Colgate - Cliente (Guest)</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Contacte a un Asesor</h1>
+    <div id="videos-container">
+        <div class="video-wrapper">
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="video-label">Tu Cámara</div>
+        </div>
+        <div class="video-wrapper">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-label">Cámara del Asesor</div>
+        </div>
+    </div>
+    <div id="status">Conectando al servidor...</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const statusDiv = document.getElementById('status');
+        
+        let peerConnection;
+        let localStream;
+        let peerId; // ID del socket del Host
+
+        const iceServers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // 1. Iniciar la cámara local
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => {
+                localStream = stream;
+                localVideo.srcObject = stream;
+                statusDiv.textContent = 'Cámara iniciada. Esperando a un asesor...';
+                // 2. Avisar al servidor que el guest está listo
+                socket.emit('guest-ready');
+            })
+            .catch(error => console.error('Error al acceder a la cámara:', error));
+
+        // 4. Recibir la oferta del host
+        socket.on('offer', (data) => {
+            peerId = data.from;
+            statusDiv.textContent = `Asesor conectado (${peerId.substring(0, 5)}). Respondiendo...`;
+
+            peerConnection = new RTCPeerConnection(iceServers);
+
+            // Añadir tracks locales a la conexión
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Manejar candidatos ICE
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', { target: peerId, candidate: event.candidate });
+                }
+            };
+
+            // Manejar track remoto
+            peerConnection.ontrack = event => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            // Establecer descripción remota y crear respuesta
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+                .then(() => peerConnection.createAnswer())
+                .then(answer => peerConnection.setLocalDescription(answer))
+                .then(() => {
+                    // 5. Enviar la respuesta al host
+                    socket.emit('answer', { target: peerId, answer: peerConnection.localDescription });
+                    statusDiv.textContent = 'Llamada en curso.';
+                });
+        });
+
+        // Recibir candidatos ICE del host
+        socket.on('ice-candidate', (data) => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        });
+
+        // Manejar desconexión del par
+        socket.on('peer-disconnected', () => {
+            statusDiv.textContent = 'El asesor se ha desconectado. Por favor, espere.';
+            remoteVideo.srcObject = null;
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            // Avisar de nuevo que estamos listos
+            socket.emit('guest-ready');
+        });
+
+        socket.on('connect', () => {
+            statusDiv.textContent = 'Conectado al servidor. Iniciando cámara...';
+        });
+    </script>
+</body>
+</html>

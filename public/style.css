@@ -1,0 +1,58 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f2f5;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    box-sizing: border-box;
+}
+
+h1 {
+    color: #1a2c5a; /* Color corporativo tipo Colgate */
+}
+
+#videos-container {
+    display: flex;
+    gap: 20px;
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.video-wrapper {
+    position: relative;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.video-label {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+video {
+    width: 100%;
+    max-width: 400px;
+    background-color: #000;
+    display: block;
+}
+
+#status {
+    margin-top: 20px;
+    padding: 10px 20px;
+    background-color: #ffc107;
+    border-radius: 5px;
+    font-weight: bold;
+}
