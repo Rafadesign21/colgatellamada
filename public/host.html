@@ -48,38 +48,43 @@
 
         let peerConnection;
         let localStream;      
-        let promoVideoStream; // <<< Esta variable se llenará cuando el video esté listo
+        let promoVideoStream;
         let peerId;
         let isShowingPromo = false;
 
+        // --- CONFIGURACIÓN DE SERVIDORES CON STUN Y TURN ---
+        // Esto soluciona el error "ICE failed" en redes complicadas.
         const iceServers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                {
+                    urls: "turn:openrelay.metered.ca:80",
+                    username: "openrelayproject",
+                    credential: "openrelayproject"
+                },
+                {
+                    urls: "turn:openrelay.metered.ca:443",
+                    username: "openrelayproject",
+                    credential: "openrelayproject"
+                }
             ]
         };
 
-        // --- INICIO DE LA CORRECCIÓN ---
-
-        // Preparamos el stream del video promocional en cuanto esté listo.
-        // Usamos el evento 'loadedmetadata' para asegurar que captureStream() esté disponible.
+        // Preparamos el stream del video promocional cuando sus metadatos se carguen.
         promoVideo.addEventListener('loadedmetadata', () => {
             console.log('Metadata del video promocional cargada.');
-            // Usamos un fallback para compatibilidad con Firefox
             if (promoVideo.captureStream) {
                 promoVideoStream = promoVideo.captureStream();
             } else if (promoVideo.mozCaptureStream) {
-                promoVideoStream = promoVideo.mozCaptureStream();
+                promoVideoStream = promoVideo.mozCaptureStream(); // Compatibilidad con Firefox
             } else {
                 console.error("El navegador no soporta la función captureStream.");
-                statusDiv.textContent = 'Error: Navegador no compatible para video.';
                 return;
             }
             console.log('Stream del video promocional capturado y listo.');
         });
         
-        // --- FIN DE LA CORRECCIÓN ---
-
         // Iniciar cámara local
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then(stream => {
@@ -94,7 +99,7 @@
             peerId = guestId;
             statusDiv.textContent = `Cliente conectado. Iniciando llamada...`;
             toggleVideoButton.disabled = false;
-            peerConnection = new RTCPeerConnection(iceServers);
+            peerConnection = new RTCPeerConnection(iceServers); // Usa la configuración con TURN
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
@@ -112,13 +117,11 @@
         });
 
         toggleVideoButton.addEventListener('click', () => {
-            if (!peerConnection || !promoVideoStream) { // Añadimos chequeo para promoVideoStream
+            if (!peerConnection || !promoVideoStream) {
                 console.warn('La conexión o el stream de video no están listos.');
                 return;
             }
-
             isShowingPromo = !isShowingPromo;
-
             if (isShowingPromo) {
                 localStream.getTracks().forEach(track => track.enabled = false);
                 const videoTrack = promoVideoStream.getVideoTracks()[0];
