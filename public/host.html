@@ -5,9 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Videollamada Colgate - Asesor (Host)</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Estilo adicional para el botón de control */
+        #controls { margin-top: 15px; }
+        #toggleVideoButton {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #toggleVideoButton:hover { background-color: #0056b3; }
+    </style>
 </head>
 <body>
     <h1>Panel del Asesor</h1>
+
+    <!-- Contenedor de videos sin cambios -->
     <div id="videos-container">
         <div class="video-wrapper">
             <video id="localVideo" autoplay muted playsinline></video>
@@ -18,7 +34,16 @@
             <div class="video-label">Cámara del Cliente</div>
         </div>
     </div>
+    
     <div id="status">Conectando al servidor...</div>
+
+    <!-- NUEVOS CONTROLES -->
+    <div id="controls">
+        <button id="toggleVideoButton" disabled>Mostrar Video Promocional</button>
+    </div>
+    <!-- Elemento de video oculto para la promoción -->
+    <video id="promoVideo" src="/video.mp4" loop style="display: none;"></video>
+    <!-- FIN DE NUEVOS CONTROLES -->
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
@@ -27,9 +52,15 @@
         const remoteVideo = document.getElementById('remoteVideo');
         const statusDiv = document.getElementById('status');
         
+        // --- NUEVOS ELEMENTOS ---
+        const toggleVideoButton = document.getElementById('toggleVideoButton');
+        const promoVideo = document.getElementById('promoVideo');
+
         let peerConnection;
-        let localStream;
-        let peerId; // ID del socket del Guest
+        let localStream;      // Stream de la cámara/micrófono
+        let promoVideoStream; // Stream del video promocional
+        let peerId;
+        let isShowingPromo = false; // Estado para saber qué se muestra
 
         const iceServers = {
             iceServers: [
@@ -38,40 +69,39 @@
             ]
         };
 
-        // 1. Iniciar la cámara local en cuanto la página carga
+        // 1. Iniciar la cámara local
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then(stream => {
                 localStream = stream;
                 localVideo.srcObject = stream;
                 statusDiv.textContent = 'Cámara iniciada. Esperando cliente...';
-                // 2. Avisar al servidor que el host está listo
                 socket.emit('host-ready');
             })
             .catch(error => console.error('Error al acceder a la cámara:', error));
 
-        // 3. El servidor nos avisa que un guest se conectó y nos da su ID
+        // Cuando el servidor nos avisa que un guest está listo
         socket.on('start-call', (guestId) => {
             peerId = guestId;
-            statusDiv.textContent = `Cliente conectado (${peerId.substring(0, 5)}). Iniciando llamada...`;
+            statusDiv.textContent = `Cliente conectado. Iniciando llamada...`;
             
+            // Habilitar el botón de cambio
+            toggleVideoButton.disabled = false;
+
             peerConnection = new RTCPeerConnection(iceServers);
             
-            // Añadir tracks locales a la conexión
+            // Añadir tracks de la CÁMARA por defecto
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-            // Manejar candidatos ICE
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
                     socket.emit('ice-candidate', { target: peerId, candidate: event.candidate });
                 }
             };
             
-            // Manejar track remoto
             peerConnection.ontrack = event => {
                 remoteVideo.srcObject = event.streams[0];
             };
 
-            // Crear y enviar la oferta
             peerConnection.createOffer()
                 .then(offer => peerConnection.setLocalDescription(offer))
                 .then(() => {
@@ -79,25 +109,82 @@
                 });
         });
 
-        // 6. Recibir la respuesta del guest
+        // --- LÓGICA PARA CAMBIAR EL VIDEO ---
+        toggleVideoButton.addEventListener('click', () => {
+            if (!peerConnection) return; // No hacer nada si no hay llamada
+
+            isShowingPromo = !isShowingPromo; // Cambiar el estado
+
+            if (isShowingPromo) {
+                // CAMBIAR A VIDEO PROMOCIONAL
+                
+                // Si es la primera vez, capturamos el stream del video
+                if (!promoVideoStream) {
+                    promoVideoStream = promoVideo.captureStream();
+                }
+
+                // Pausamos la cámara local para apagar el indicador LED
+                localStream.getTracks().forEach(track => track.enabled = false);
+
+                // Reemplazamos las pistas de audio y video en la conexión
+                const videoTrack = promoVideoStream.getVideoTracks()[0];
+                const audioTrack = promoVideoStream.getAudioTracks()[0];
+                
+                replaceTrack(videoTrack, 'video');
+                replaceTrack(audioTrack, 'audio');
+
+                promoVideo.play();
+                toggleVideoButton.textContent = 'Mostrar Cámara';
+                statusDiv.textContent = 'Mostrando video promocional al cliente.';
+
+            } else {
+                // CAMBIAR DE VUELTA A LA CÁMARA
+                promoVideo.pause();
+
+                // Re-habilitamos las pistas de la cámara
+                localStream.getTracks().forEach(track => track.enabled = true);
+
+                const videoTrack = localStream.getVideoTracks()[0];
+                const audioTrack = localStream.getAudioTracks()[0];
+                
+                replaceTrack(videoTrack, 'video');
+                replaceTrack(audioTrack, 'audio');
+                
+                toggleVideoButton.textContent = 'Mostrar Video Promocional';
+                statusDiv.textContent = 'Llamada en curso.';
+            }
+        });
+
+        // Función auxiliar para reemplazar una pista en la conexión
+        function replaceTrack(newTrack, kind) {
+            const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === kind);
+            if (sender) {
+                sender.replaceTrack(newTrack);
+            }
+        }
+
+        // El resto de los manejadores de eventos no cambian
         socket.on('answer', (data) => {
             statusDiv.textContent = 'Llamada en curso.';
             peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
         });
 
-        // Recibir candidatos ICE del guest
         socket.on('ice-candidate', (data) => {
-            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            if (peerConnection) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
         });
 
-        // Manejar desconexión del par
         socket.on('peer-disconnected', () => {
             statusDiv.textContent = 'El cliente se ha desconectado. Esperando uno nuevo...';
             remoteVideo.srcObject = null;
+            toggleVideoButton.disabled = true;
+            toggleVideoButton.textContent = 'Mostrar Video Promocional';
+            isShowingPromo = false;
+            promoVideo.pause();
             if (peerConnection) {
                 peerConnection.close();
             }
-            // Avisar de nuevo que estamos listos
             socket.emit('host-ready');
         });
 
