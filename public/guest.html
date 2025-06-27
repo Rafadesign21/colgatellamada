@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Videollamada Colgate - Cliente (Guest)</title>
+    <!-- Solución para el error favicon.ico: Añade un ícono vacío -->
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -31,11 +33,13 @@
         let localStream;
         let peerId;
 
-        // --- CONFIGURACIÓN DE SERVIDORES CON STUN Y TURN ---
+        // --- CONFIGURACIÓN DE SERVIDORES MÁS ROBUSTA ---
         const iceServers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' },
                 {
                     urls: "turn:openrelay.metered.ca:80",
                     username: "openrelayproject",
@@ -56,48 +60,35 @@
                 statusDiv.textContent = 'Cámara iniciada. Esperando a un asesor...';
                 socket.emit('guest-ready');
             })
-            .catch(error => console.error('Error al acceder a la cámara:', error));
+            .catch(error => { console.error('Error al acceder a la cámara:', error); });
 
         socket.on('offer', (data) => {
             peerId = data.from;
             statusDiv.textContent = `Asesor conectado. Respondiendo...`;
-            peerConnection = new RTCPeerConnection(iceServers); // Usa la configuración con TURN
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-            peerConnection.onicecandidate = event => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', { target: peerId, candidate: event.candidate });
+            peerConnection = new RTCPeerConnection(iceServers);
+            peerConnection.oniceconnectionstatechange = () => {
+                statusDiv.textContent = `Estado de la conexión: ${peerConnection.iceConnectionState}`;
+                if(peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+                    statusDiv.textContent = 'Llamada en curso.';
                 }
             };
-            peerConnection.ontrack = event => {
-                remoteVideo.srcObject = event.streams[0];
-            };
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            peerConnection.onicecandidate = event => { if (event.candidate) { socket.emit('ice-candidate', { target: peerId, candidate: event.candidate }); } };
+            peerConnection.ontrack = event => { remoteVideo.srcObject = event.streams[0]; };
             peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
                 .then(() => peerConnection.createAnswer())
                 .then(answer => peerConnection.setLocalDescription(answer))
-                .then(() => {
-                    socket.emit('answer', { target: peerId, answer: peerConnection.localDescription });
-                    statusDiv.textContent = 'Llamada en curso.';
-                });
+                .then(() => { socket.emit('answer', { target: peerId, answer: peerConnection.localDescription }); });
         });
 
-        socket.on('ice-candidate', (data) => {
-            if (peerConnection) {
-                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-            }
-        });
-
+        socket.on('ice-candidate', (data) => { if (peerConnection) { peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); } });
         socket.on('peer-disconnected', () => {
             statusDiv.textContent = 'El asesor se ha desconectado. Por favor, espere.';
             remoteVideo.srcObject = null;
-            if (peerConnection) {
-                peerConnection.close();
-            }
+            if (peerConnection) { peerConnection.close(); }
             socket.emit('guest-ready');
         });
-
-        socket.on('connect', () => {
-            statusDiv.textContent = 'Conectado al servidor. Iniciando cámara...';
-        });
+        socket.on('connect', () => { statusDiv.textContent = 'Conectado al servidor. Iniciando cámara...'; });
     </script>
 </body>
 </html>
