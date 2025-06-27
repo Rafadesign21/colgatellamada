@@ -29,72 +29,69 @@
         
         let peerConnection;
         let localStream;
-        let peerId; // ID del socket del Host
+        let peerId;
 
+        // --- CONFIGURACIÓN DE SERVIDORES CON STUN Y TURN ---
         const iceServers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                {
+                    urls: "turn:openrelay.metered.ca:80",
+                    username: "openrelayproject",
+                    credential: "openrelayproject"
+                },
+                {
+                    urls: "turn:openrelay.metered.ca:443",
+                    username: "openrelayproject",
+                    credential: "openrelayproject"
+                }
             ]
         };
 
-        // 1. Iniciar la cámara local
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then(stream => {
                 localStream = stream;
                 localVideo.srcObject = stream;
                 statusDiv.textContent = 'Cámara iniciada. Esperando a un asesor...';
-                // 2. Avisar al servidor que el guest está listo
                 socket.emit('guest-ready');
             })
             .catch(error => console.error('Error al acceder a la cámara:', error));
 
-        // 4. Recibir la oferta del host
         socket.on('offer', (data) => {
             peerId = data.from;
-            statusDiv.textContent = `Asesor conectado (${peerId.substring(0, 5)}). Respondiendo...`;
-
-            peerConnection = new RTCPeerConnection(iceServers);
-
-            // Añadir tracks locales a la conexión
+            statusDiv.textContent = `Asesor conectado. Respondiendo...`;
+            peerConnection = new RTCPeerConnection(iceServers); // Usa la configuración con TURN
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-            // Manejar candidatos ICE
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
                     socket.emit('ice-candidate', { target: peerId, candidate: event.candidate });
                 }
             };
-
-            // Manejar track remoto
             peerConnection.ontrack = event => {
                 remoteVideo.srcObject = event.streams[0];
             };
-
-            // Establecer descripción remota y crear respuesta
             peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
                 .then(() => peerConnection.createAnswer())
                 .then(answer => peerConnection.setLocalDescription(answer))
                 .then(() => {
-                    // 5. Enviar la respuesta al host
                     socket.emit('answer', { target: peerId, answer: peerConnection.localDescription });
                     statusDiv.textContent = 'Llamada en curso.';
                 });
         });
 
-        // Recibir candidatos ICE del host
         socket.on('ice-candidate', (data) => {
-            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            if (peerConnection) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
         });
 
-        // Manejar desconexión del par
         socket.on('peer-disconnected', () => {
             statusDiv.textContent = 'El asesor se ha desconectado. Por favor, espere.';
             remoteVideo.srcObject = null;
             if (peerConnection) {
                 peerConnection.close();
             }
-            // Avisar de nuevo que estamos listos
             socket.emit('guest-ready');
         });
 
